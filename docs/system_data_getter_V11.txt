@@ -1,0 +1,1334 @@
+
+
+
+
+
+system_data_getter_V11 {TB_1}
+
+
+input:
+
+    service_name
+
+
+
+process:
+
+
+    discoverer/
+
+        input:
+
+            if first_discovery:
+
+                "service_name" {non-discoverable stable external identity}
+            
+            else: {Not the first_discovery}
+
+                None
+
+
+        process:
+
+
+            if first_discovery:
+
+                input_setting: (only run when it is first_discovery) {this section(input_setting) set non-discoverable_datas} {non-discoverable_datas is critical_datas for discoverer_section}
+                
+                    - input: service_name {non-discoverable stable external identity}
+
+                    - process: target_selector_rules={"service_name"=service_name}
+
+                    - output: target_selector_rules (constant configuration, Not part of discoverer outputs) {non-discoverable stable external identities}
+
+
+
+
+            execution_environment_detector:
+
+                - input: None
+
+                - process:
+
+                    1.orchestrator_detect (none | unknown)
+
+                        input:
+
+                            None
+
+                        process:
+
+                            if kubernetes signals exist:
+                                orchestrator = kubernetes
+                            elif compose signals exist:
+                                orchestrator = docker_compose
+                            else:
+                                orchestrator = none
+
+                            if orchestrator != none: #(only for TB1)
+
+                                orchestrator = unknown
+                        
+                        output:
+
+                            orchestrator(none | unknown)
+
+
+                    2.container_runtime_detect (docker | unknown)
+
+                        input:
+
+                            None
+
+                        process:
+
+                            if docker.sock exists OR docker CLI works OR cgroup contains docker:
+                                docker
+                            else:
+                                unknown
+                        
+                        output:
+
+                            container_runtime(docker | unknown)
+
+
+                    3.cgroup_driver_detect (cgroupfs | unknown) # cgroup_driver don't used in TB1 , but usefull for general.
+
+                        input:
+
+                            None
+
+                        process:
+
+                            if "system.slice" in path:
+                                systemd
+                            elif "docker" in path OR "kubepods" in path:
+                                cgroupfs
+                            else:
+                                unknown
+                        
+                        output:
+
+                            cgroup_driver(cgroupfs | unknown)
+
+
+                    4.cgroup_version_detect (v2 | unknown)
+
+                        input:
+
+                            None
+
+                        process:
+
+                            call "/sys/fs/cgroup/cgroup.controllers"
+
+                            if file exists:
+                                cgroup_version = "v2"
+                            else:
+                                cgroup_version = "unknown"
+                        
+                        output:
+
+                            cgroup_version(v2 | unknown)
+
+                    5.host_environment_detect (docker_desktop | unknown)
+
+                        input:
+
+                            None
+
+                        process:
+
+                            1.detect docker_desktop_markers
+
+                                input:
+
+                                    none
+
+                                process:
+
+                                    is_docker_desktop = false
+
+                                    1.check docker-desktop WSL distribution {operation component}
+
+                                        input:
+
+                                            none
+
+                                        process:                                            
+
+                                            r1 = call "wsl -l -v"
+
+                                            if "docker-desktop" exist in r1:
+
+                                                is_docker_desktop = true
+                                        
+                                        output:
+
+                                            none
+
+                                    2.check docker info metadata {operation component}
+
+                                        input:
+
+                                            none
+
+                                        process:                                            
+
+                                            r2 = call "docker info"
+
+                                            if r2["Name"]=="docker-desktop":
+
+                                                is_docker_desktop = true
+                                        
+                                        output:
+
+                                            none
+
+                                output:
+
+                                    is_docker_desktop (true | false)
+
+                            2.classify:
+
+                                input:
+
+                                    is_docker_desktop
+                                
+                                process:
+
+                                    if is_docker_desktop==true:
+
+                                        host_environment="docker_desktop"
+
+                                    else:
+
+                                        host_environment="unknown"
+                                
+                                output:
+
+                                    host_environment (docker_desktop | unknown)
+                        
+                        output:
+
+                            host_environment (docker_desktop | unknown)
+                    
+
+                    6.packing in execution_env_metadata pack
+
+                        input:
+
+                            orchestrator
+
+                            container_runtime
+
+                            cgroup_driver
+
+                            cgroup_version
+
+                            host_environment
+
+                        process:
+
+                        execution_env_metadata = {
+                            orchestrator,
+                            container_runtime,
+                            cgroup_driver,
+                            cgroup_version,
+                            host_environment
+                        }
+
+                        output:
+
+                            execution_env_metadata (orchestrator | container_runtime | cgroup_driver | cgroup_version | host_environment)
+
+                    
+                - output: execution_env_metadata (orchestrator | container_runtime | cgroup_driver | cgroup_version | host_environment)
+
+
+
+
+            target_container_discovery:
+
+                - input: execution_env_metadata(orchestrator | container_runtime) + target_selector_rules{non-discoverable stable external identities}
+
+                - process:
+
+                    1.enumerate runtime containers:
+
+                        input:
+
+                            orchestrator (none | unknown) + container_runtime (docker | unknown)
+
+                        process:
+
+                            #get the list of workloads from the container_runtime
+                            
+                            if container_runtime=="docker" and orchestrator==none:
+                            
+                                list_of_workloads = call "docker ps"
+
+                            else:
+
+                                if container_runtime==unknown:
+
+                                    print("enumeration_failed: container_runtime==unknown")
+
+                                else: #orchestrator==unknown
+
+                                    print("enumeration_failed: orchestrator==unknown")
+
+                        output:
+
+                            list_of_workloads
+
+
+                    2.normalize candidates
+
+                        input:
+
+                            list_of_workloads
+
+                        process:
+
+                            i=0
+
+                            candidates=[]
+
+                            for cnd_id , img , nm in list_of_workloads:
+
+                                candidate[i]={"container_id"=cnd_id,"image"=img,"name"=nm}
+
+                                i+=1
+
+                        output:
+
+                            candidates(structured_workloads)
+
+
+                    3.match service_name against container_name
+
+                        input:
+
+                            candidates + target_selector_rules
+
+                        process:
+
+                            candidates_index_matched={}
+
+                            service_name=target_selector_rules["service_name"]
+
+                            i=0
+
+                            for cnd in candidates:
+
+                                if cnd["name"]==service_name:
+
+                                    candidates_index_matched[i]=true
+                                
+                                else:
+
+                                    candidates_index_matched[i]=false
+                                    
+                                i+=1
+
+                        output:
+
+                            candidates_index_matched {Dict[int,bool]}
+
+
+                    4.resolve ambiguity
+
+                        input:
+
+                            candidates + candidates_index_matched
+
+                        process:
+
+                            s=0
+
+                            i=-1
+
+                            for k,v in candidates_index_matched:
+
+                                if v==true:
+
+                                    s+=1
+
+                                    i=k
+                            
+                            if s==1:
+
+                                container_id = candidates[i]["container_id"]
+                            
+                            else:
+
+                                if s==0:
+
+                                    print("resolve ambiguity failed: No candidates matched")
+                                
+                                else: #s>1
+
+                                    print("resolve ambiguity failed: candidates matched is more than 1")
+
+                        output:
+
+                            container_id
+                    
+
+                    5.build target_container_identity
+
+                        input:
+
+                            container_id
+
+                        process:
+
+                            target_container_identity={"container_id"=container_id}
+
+                        output:
+
+                            target_container_identity
+                        
+
+                - output: target_container_identity (container_id)
+
+
+
+
+            workload_resolver:
+
+                - PID_discovery:
+
+                    input:
+                    
+                        execution_env_metadata(container_runtime | host_environment) + target_container_identity(container_id)
+
+                    process:
+
+                        host_PID = -1
+
+                        container_id = target_container_identity["container_id"]
+
+                        in power-shell:
+
+                            if container_runtime == "docker":
+
+                                runtime_pid = call "docker inspect  -f '{{.State.Pid}}' container_id"
+                            
+                            else:
+
+                                print("PID_discovery failed: container_runtime != 'docker' ")
+
+                            call "wsl -d docker-desktop"   {for going into docker_desktop shell}
+                        
+
+                            in docker_desktop-shell:
+
+                                if host_environment == "docker_desktop"
+
+                                    l_pids : List[PID] = call "ls /proc | grep '^[0-9]'"
+
+                                    for p in l_pids:
+
+                                        pids : List[PID] = call "cat /proc/<p>/status | grep NSpid"
+
+                                        if runtime_pid in pids:
+
+                                            host_PID = p
+
+                                            break
+
+                                    else:
+
+                                        print("PID_discovery failed: there is NO parent_p that match to parent_pid")
+
+                                else:
+
+                                    print("PID_discovery failed: host_environment != 'docker_desktop' ")
+                            
+                                #call "exit"   {for backing into power-shell}
+
+                    output:
+
+                        host_PID {visibale_pid}
+
+
+                - cgroup_discovery:
+
+                    input: 
+                    
+                        execution_env_metadata(cgroup_version) + host_PID
+
+                    process:
+
+                        1.read /proc/<pid>/cgroup
+
+                            input:
+
+                                host_PID
+
+                            process:
+
+                                in docker_desktop-shell:
+
+                                    raw_cgroup_path = call "cat /proc/<host_PID>/cgroup"
+
+                            output:
+
+                                raw_cgroup_path
+                            
+
+                        2.parse according to cgroup_version
+
+                            input:
+
+                                raw_cgroup_path
+
+                            process:
+
+                                if cgroup_version == "v2":  #raw_cgroup_path -> hierarchy_id:controllers:relative_path
+
+                                    raw_cgroup_path_l : List[hierarchy_id , controllers , relative_path] = ["" , "" , ""]
+
+                                    i = 0
+
+                                    for ch in raw_cgroup_path:
+
+                                        if ch != ":":
+
+                                            raw_cgroup_path_l[i] += ch
+                                        
+                                        else:
+
+                                            i+=1
+                                
+                                else:
+
+                                    print("cgroup_discovery , parse according to cgroup_version failed: cgroup_version != 'v2' ")
+                                
+                                relative_path = raw_cgroup_path_l[2]
+
+                            output:
+
+                                relative_path
+
+
+                        3.build absolute path
+
+                            input:
+
+                                relative_path
+
+                            process:
+
+                                if cgroup_version == "v2":
+
+                                    cgroup_version_root = "/sys/fs/cgroup"
+                                
+                                else:
+
+                                    print("cgroup_discovery , build absolute path failed: cgroup_version != 'v2' ")
+                                
+                                cgroup_candidate_absolute_path = cgroup_version_root + relative_path
+
+                            output:
+
+                                cgroup_candidate_absolute_path
+
+
+                        4.validate path exists
+
+                            input:
+
+                                cgroup_candidate_absolute_path
+
+                            process:
+
+                                in docker_desktop-shell:
+
+                                    #operation
+
+                                    call "test -d cgroup_candidate_absolute_path"
+
+                                    #get answer
+
+                                    a = call "echo $?"
+
+                                    if a == 0:
+
+                                        cgroup_absolute_path = cgroup_candidate_absolute_path
+
+                                    else:
+
+                                        print("cgroup_discovery , validate path exists failed: cgroup_candidate_absolute_path does not exist")
+
+                            output:
+
+                                cgroup_absolute_path
+
+                    output:
+                    
+                        cgroup_absolute_path
+
+
+                - namespace_discovery:
+
+                    input:
+                    
+                        host_PID {be cause access with PID is easiest way to get namespace  againts (execution_env_metadata + target_container_identity)}
+
+                    process:
+
+                        namespace_root = "/proc/<host_PID>/ns"
+
+                        #operation
+
+                        call "test -d <namespace_root>"
+
+                        #check
+                        
+                        a = call "echo $?"
+
+                        if a == 0:
+
+                            namespace_handler_path = namespace_root
+                        
+                        else:
+
+                            print("namespace_discovery failed: namespace_root as the path does not exist")
+
+                    output:
+                    
+                        namespace_handler_path (مثلاً /proc/<PID>/ns/net) {namespace is an object and because it is not an address we have a hendler for it to use it and for that the output is the path of namespace_hadler}
+
+
+
+
+            starttime_finder:
+
+                - input: host_PID
+
+                - process:
+
+                    1.read /proc/<host_PID>/stat
+
+                        input:
+
+                            host_PID
+
+                        process:
+
+                            raw_fields : string = call "cat /proc/<host_PID>/stat"
+
+                        output:
+
+                            raw_fields
+                    
+                    2.parse fields to list
+
+                        input:
+
+                            raw_fields
+                        
+                        process:
+
+                            #raw_fields -> pid (comm) state ... starttime
+
+                            l_n = [0 , 1 , 2 , 3 , 4 , 5 , 6 , 7 , 8 , 9]
+
+                            state_fields : List[string] = []
+
+                            i = 0
+
+                            j = 0
+
+                            state_fields[i] = ""
+
+                            for ch in raw_fields:
+
+                                if ch != " ":
+
+                                    if ch == "(":
+
+                                        j = 1
+
+                                    elif ch == ")":
+
+                                        j = 0
+
+                                    state_fields[i] += ch
+                            
+                                else: #ch == " "
+
+                                    if j == 0:
+
+                                        i += 1
+
+                                        state_fields[i] = ""
+
+                        output:
+
+                            state_fields
+
+
+                    3.extract field[21] {field 22}
+
+                        input:
+
+                            state_fields
+
+                        process:
+
+                            starttime = int(state_fields[21])
+
+                        output:
+
+                            starttime
+
+                - output: starttime
+
+            
+
+
+
+            build_outputs:
+
+                - input:
+
+                    execution_env_metadata
+
+                    target_container_identity
+
+                    host_PID
+
+                    cgroup_absolute_path
+
+                    namespace_handler_path
+
+                    starttime
+
+
+                - process:
+
+                    env_datas = {"execution_env_metadata"=execution_env_metadata , "target_container_identity"=target_container_identity}
+
+                    discoverer_results = {"host_PID"=host_PID ,
+                    "cgroup_absolute_path"=cgroup_absolute_path,
+                    "namespace_handler_path"=namespace_handler_path,
+                    "cgroup_version"=execution_env_metadata["cgroup_version"]}
+
+                    identity_datas = {"host_PID"=host_PID , "starttime"=starttime}
+
+
+                - output:
+
+                    env_datas (execution_env_metadatas | target_container_identity)
+
+                    discoverer_results (host_PID | cgroup_absolute_path | namespace_handler_path | cgroup_version) {metric_reader_need_datas}
+
+                    identity_datas (host_PID | starttime)
+
+
+
+
+            discovery pipeline:
+
+                if first_discovery:
+
+                    0.set target_selector_rules(only in first_discovery and after that discoverer_section know what is target_selector_rules) [input_setting]
+
+                1.detect execution_env_metadata [execution_environment_detector]
+
+                2.discover target_container [target_container_discovery]
+
+                3.discover host_PID [PID_discovery]
+
+                4.discover cgroup_absolute_path [cgroup_discovery]
+
+                5.discover namespace_handler_path [namespace_discovery]
+
+                6.find starttime [starttime_finder]
+
+                7.build outputs [build_outputs]
+
+
+
+
+
+        output:
+
+            env_datas (execution_env_metadatas | target_container_identity)
+
+            discoverer_results (host_PID | cgroup_absolute_path | namespace_handler_path | cgroup_version) {metric_reader_need_datas}
+
+            identity_datas (host_PID | starttime)
+
+
+
+
+    cache/
+
+        input:
+
+            discoverer_output
+
+
+        process:
+
+            .record env_datas {only for debugging}
+
+            .record discoverer_results (host_PID | cgroup_absolute_path | namespace_handler_path | cgroup_version) {metric_reader_need_datas}
+
+            .record identity_datas (host_PID | starttime) {for health_check loop}
+
+
+        output:
+
+            env_datas {only for debugging}
+
+            discoverer_results (host_PID | cgroup_absolute_path | namespace_handler_path | cgroup_version) {metric_reader_need_datas}
+
+            identity_datas (host_PID | starttime) {for health_check loop}
+
+
+
+
+    metric_reader/ (every 10_sec)
+
+        input: (every 10_sec)
+
+            discoverer_results [cache]
+
+
+        process: (different frequency)
+
+            - time_recorder: (every 10_sec)
+
+                - input:
+
+                    none
+                
+                - process:
+
+                    s_time = time.now()
+
+                - output:
+
+                    s_time
+            
+            - CLK_TCK getter: (every 10_sec)
+
+                input:
+
+                    none
+                
+                process:
+
+                    CLK_TCK = call "getconf CLK_TCK"
+                
+                output:
+
+                    CLK_TCK
+
+            - cgroup_metrics_reader:
+
+                - input: discoverer_results(cgroup_version)[cache] + discoverer_results(cgroup_absolute_path)[cache]
+
+                - process:
+
+                    Memory_utilization_part1 (every 500_ms)
+
+                        input: discoverer_results(cgroup_absolute_path)[cache]
+
+                        process: current_memory = int(call "cat <cgroup_absolute_path>/memory.current")
+
+                        output: current_memory (bytes)
+
+
+                    Memory_utilization_part2 (every 10_sec)
+
+                        input: discoverer_results(cgroup_absolute_path)[cache]
+
+                        process:
+
+                            a : string = call "cat <cgroup_absolute_path>/memory.max"
+
+                            if a == "max":
+
+                                max_memory = 1024 * int( call "awk '/^MemTotal:/ {print $2}' /proc/meminfo" {max_memory == host_total_memory})
+
+                            else:
+
+                                max_memory = int(a)
+
+                        output: max_memory (bytes)
+
+
+                    CPU_utilization_part2 (every 10_sec)
+
+                        input: discoverer_results(cgroup_absolute_path)[cache]
+
+                        process:
+
+                            1.get placement_cpu_count
+
+                                input: discoverer_results(cgroup_absolute_path)[cache]
+
+                                process:
+
+                                    a : string = call "cat <cgroup_absolute_path>/cpuset.cpus.effective"
+
+                                    l = a.splite(",")
+
+                                    placement_cpu_count = 0
+
+                                    for c in l:
+
+                                        if "-" in c:
+
+                                            c : List[start,end] = c.splite("-")
+
+                                            placement_cpu_count += (int(c[1]) - int(c[0])) + 1
+
+                                        else:
+
+                                            placement_cpu_count += 1
+
+                                output: placement_cpu_count
+
+                            2.get quota_cpu_count
+
+                                input: discoverer_results(cgroup_absolute_path)[cache]
+
+                                process:
+
+                                    a : string = call "cat <cgroup_absolute_path>/cpu.max"
+
+                                    if "max" in a:
+
+                                        quota_cpu_count = placement_cpu_count
+                                    
+                                    else:
+
+                                        #quota_cpu_count = quota / period
+
+                                        l = a.splite()
+
+                                        quota_cpu_count = int(l[0]) / int(l[1])
+
+                                output: quota_cpu_count
+
+                            3.calculate effective_cpu_count
+
+                                input: placement_cpu_count + quota_cpu_count
+
+                                process: effective_cpu_count = min(placement_cpu_count , quota_cpu_count)
+
+                                output: effective_cpu_count
+
+                        output: effective_cpu_count
+
+
+                - output:
+
+                    effective_cpu_count [CPU](10s)
+
+                    max_memory [Memory](10s)
+
+                    current_memory [Memory](500ms)
+
+                
+            - Kernel_interface_reader:
+
+                - input: discoverer_results(cgroup_version)[cache] + discoverer_results(host_PID)[cache]
+
+                - process:
+
+                    CPU_utilization_part1 (every 10_sec)
+
+                        input: discoverer_results(host_PID)[cache]
+
+                        process:
+
+                            1.read /proc/<host_PID>/stat
+
+                                input:
+
+                                    host_PID
+
+                                process:
+
+                                    raw_fields : string = call "cat /proc/<host_PID>/stat"
+
+                                output:
+
+                                    raw_fields
+                            
+                            2.parse fields to list
+
+                                input:
+
+                                    raw_fields
+                                
+                                process:
+
+                                    #raw_fields -> pid (comm) state ... starttime
+
+                                    state_fields : List[string] = []
+
+                                    i = 0
+
+                                    j = 0
+
+                                    state_fields[i] = ""
+
+                                    for ch in raw_fields:
+
+                                        if ch != " ":
+
+                                            if ch == "(":
+
+                                                j = 1
+
+                                            elif ch == ")":
+
+                                                j = 0
+
+                                            state_fields[i] += ch
+                                    
+                                        else: #ch == " "
+
+                                            if j == 0:
+
+                                                i += 1
+
+                                                state_fields[i] = ""
+
+                                output:
+
+                                    state_fields
+
+
+                            3.extract field[13] and field[14] {field 14 , field 15}
+
+                                input:
+
+                                    state_fields
+
+                                process:
+
+                                    utime  = int(state_fields[13])
+
+                                    stime  = int(state_fields[14])
+
+                                    cpu_time = utime + stime
+
+                                output:
+
+                                    cpu_time
+                        
+                        output: cpu_time
+
+
+                    Disk utilization (every 10_sec)
+
+                        input: discoverer_results(host_PID)[cache]
+
+                        process:
+
+                            io_l : List[string] = call "cat /proc/<host_PID>/io"
+
+                            for i in io_l:
+
+                                if "read_bytes" in i:
+
+                                    read_bytes = int(i[12:])
+                                
+                                elif "write_bytes" in i:
+
+                                    write_bytes = int(i[13:])
+                            
+                            io_bytes = read_bytes + write_bytes
+
+                        output:
+                        
+                            io_bytes
+
+                            read_bytes
+
+                            write_bytes
+
+
+                    network_consuming (every 10_sec)
+
+                        input: discoverer_results(host_PID)[cache]
+
+                        process:
+
+                            l_s : List[string] = call "cat /proc/<host_PID>/net/dev"
+
+                            al : List[string] = []
+
+                            i = 0
+
+                            for s in l_s:
+
+                                if "lo" not in s:
+
+                                    al[i] = s.splite()
+
+                                    i += 1
+                            
+                            rx_bytes , tx_bytes = 0 , 0
+                            
+                            for a in al:
+
+                                rx_bytes += int(a[1]) {Receive_bytes}
+
+                                tx_bytes += int(a[9]) {Transmit_bytes}
+
+                        output: 
+                        
+                            rx_bytes
+                            
+                            tx_bytes
+
+                - output:
+
+                    cpu_time [CPU](10s)
+
+                    read_bytes [Disk](10s)
+
+                    write_bytes [Disk](10s)
+
+                    io_bytes [Disk](10s)
+
+                    rx_bytes [network](10s)
+
+                    tx_bytes [network](10s)
+
+                
+            - namespace-context_reader # namespace-context_reader don't used in TB1 , but usefull for next TBs
+
+                - input: none #discoverer_results(namespace_handler_path)[cache]
+
+                - process: none
+
+                - output: none #namespace_raw_metrics {like network_metrics}
+
+
+            - packing_per_frequency
+
+                - input:
+
+                    (every 10_sec):
+
+                        s_time (10s)
+
+                        CLK_TCK (10s)
+
+                        effective_cpu_count [CPU](10s)
+
+                        max_memory [Memory](10s)
+
+                        cpu_time [CPU](10s)
+
+                        read_bytes [Disk](10s)
+
+                        write_bytes [Disk](10s)
+
+                        io_bytes [Disk](10s)
+
+                        rx_bytes [network](10s)
+
+                        tx_bytes [network](10s)
+
+
+                    (every 500_ms):
+
+                        current_memory [Memory](500ms)
+
+
+                - process:
+
+                    (every 10_sec):
+
+                        10s_metrics = {
+                            "s_time" = s_time
+                            "CLK_TCK" = CLK_TCK
+                            "effective_cpu_count" = effective_cpu_count
+                            "max_memory" = max_memory
+                            "cpu_time" = cpu_time
+                            "read_bytes" = read_bytes
+                            "write_bytes" = write_bytes
+                            "io_bytes" = io_bytes
+                            "rx_bytes" = rx_bytes
+                            "tx_bytes" = tx_bytes
+                        }
+
+                    (every 500_ms):
+
+                        500ms_metrics = {
+                            "current_memory" = current_memory
+                        }
+
+                - output:
+
+                    (every 10_sec):
+
+                        10s_metrics
+
+                    (every 500_ms):
+
+                        500ms_metrics
+
+
+        output: (different frequency)
+
+            10s_metrics
+
+            500ms_metrics
+
+
+
+
+
+    health_check loop: (every 10_sec)
+
+      if not /proc/<host_PID[cache(identity_datas(host_PID))]> exists:
+
+        1.discovery(run discoverer) [discoverer]
+
+        2.record discoverer_output [cache]
+
+        3.read_raw_metrics(run metric_reader) [metric_reader]
+
+      else:
+
+        if /proc/<pid>/stat (starttime) != cached_starttime[cache(identity_datas(starttime))]:
+
+            1.discovery(run discoverer) [discoverer]
+
+            2.record discoverer_output [cache]
+
+            3.read_raw_metrics(run metric_reader) [metric_reader]
+
+        else:
+
+            1.read_raw_metrics(run metric_reader) [metric_reader]
+
+
+
+
+    working pipeline: (start when system_data_getter started(first_start))
+
+      1.discovery(run discoverer){first_discovery} [discoverer]
+
+      2.record discoverer_output [cache]
+
+      3.health_check loop (every 10_sec)
+
+
+
+
+
+
+output:
+
+    10s_metrics
+
+    500ms_metrics
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--------
+
+
+
+
+
+general/
+
+discovery layer:
+
+    orchestrator:
+        none
+        kubernetes
+        docker_compose
+        unknown
+
+    container_runtime:
+        docker
+        containerd
+        cri_o
+        unknown
+
+    cgroup_driver:
+        systemd
+        cgroupfs
+        unknown
+
+    cgroup_version:
+        v1
+        v2
+        unknown
+
+    host_environment:
+        docker_desktop
+        linux_host
+        unknown
+
+
+environment health layer: (optional)
+
+	network
+
+	proxy
+
+	platform
+
+
+
+
+
+
+
+TB1-V_1/
+
+orchestrator: # unused in TB1
+    none
+    unknown
+
+container_runtime:
+    docker
+    unknown
+
+cgroup_driver: # unused in TB1
+    cgroupfs
+    unknown
+
+cgroup_version:
+    v2
+    unknown
+
+host_environment:
+    docker_desktop
+    unknown
+
