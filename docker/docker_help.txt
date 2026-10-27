@@ -1,0 +1,154 @@
+
+
+--------
+
+معماری ساخت Dockerfile:
+
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY . .
+
+RUN pip install ...
+
+CMD [...]
+
+
+میشه:
+
+
+FROM
+ ↓
+از چه Image پایه‌ای شروع کنم؟
+
+WORKDIR
+ ↓
+داخل Image، محل کارم کجاست؟
+
+COPY
+ ↓
+چه فایل‌هایی از Build Context را وارد Image کنم؟
+
+RUN (در فرایند ساخت container , run میشه)
+ ↓
+هنگام BUILD چه دستوری اجرا کنم؟
+
+CMD (در فرایند اجرا کردن container , run میشه)
+ ↓
+وقتی بعداً Container اجرا شد، چه چیزی اجرا شود؟
+
+
+
+
+
+
+---------
+
+
+
+
+
+
+-f ...      → Dockerfile را از اینجا بخوان
+-t ...      → Image را این اسم بگذار
+.           → کل TB1 را Build Context قرار بده
+
+
+
+
+build context تعیین میکنه که داکر موقع ساخت image از روی داکر فایل تا کجا دسترسی داره
+
+
+
+example: (طریقه ساخت image از روی dockerfile)
+
+docker build -f docker/service_A/Dockerfile -t tb1-service-a ./docker
+
+
+
+
+
+--------
+
+توضیحات COPY . . :
+
+
+WORKDIR /app
+
+COPY . .
+
+
+میشه:
+
+
+COPY  <source>  <destination>
+      │          │
+      │          └── .
+      │              یعنی WORKDIR فعلی → /app
+      │
+      └────────────── .
+                      یعنی ریشه Build Context
+
+پس اگر Build Context این باشد:
+
+TB1/
+├── service_A.py
+├── service_B.py
+├── sdk/
+│   └── sdk.py
+├── agent/
+│   └── agent.py
+└── docker/
+    └── service_A/
+        └── Dockerfile
+
+و بزنی:
+
+docker build -f docker/service_A/Dockerfile -t service-a .
+
+آن . آخر یعنی:
+
+Build Context = TB1/
+
+در نتیجه:
+
+COPY . .
+
+تقریباً یعنی:
+
+محتویات Build Context را داخل /app کپی کن.
+
+
+-----------
+
+
+
+
+
+خب پس با dockerfile 
+میایم و image 
+رو که یک قالب هست میسازیم , حالا از رو image 
+هامون میتونیم کانتینر بسازیم و بعد ما اون کانتینر هرو کنترل میکنیم , گرفتم
+
+
+
+
+طریقه ساخت container از روی image:
+
+docker run --name <container_name> <image_name>
+
+
+
+
+
+طریقه ران کردن کانتینر:
+
+docker start <container_id>
+
+
+
+
+
+

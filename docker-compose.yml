@@ -1,0 +1,88 @@
+
+
+services:
+
+  service_a:
+
+    environment:
+      - PYTHONUNBUFFERED=1
+
+    build:
+
+      context: .
+
+      dockerfile: docker\service_A\Dockerfile
+    
+    image: service_a
+
+    container_name: service_a
+
+    hostname: service_a
+
+    ports:
+      - "8000:8000"
+
+  requester:
+
+    environment:
+      - PYTHONUNBUFFERED=1
+    
+    build:
+
+      context: .
+
+      dockerfile: docker/requester/Dockerfile
+    
+    image:  reuester
+
+    container_name: requester
+
+    depends_on:
+      - service_a
+  
+  service_b:
+
+    environment:
+      - PYTHONUNBUFFERED=1
+    
+    build:
+
+      context: .
+
+      dockerfile: docker/service_B/Dockerfile
+    
+    image: service_b
+
+    container_name: service_b
+
+    hostname: service_b
+
+    ports:
+      - "8001:8001"
+
+  service_c:
+
+    environment:
+      - PYTHONUNBUFFERED=1
+    
+    build:
+
+      context: .
+
+      dockerfile: docker/service_C/Dockerfile
+    
+    image: service_c
+
+    container_name: service_c
+
+    hostname: service_c
+
+    ports:
+      - "8002:8002"
+
+    
+
+  
+
+    
+
