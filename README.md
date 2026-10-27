@@ -1,13 +1,22 @@
 
 
-TB1: 
+TB1:
+
 end to end pipeline
+
 heartbeat
+
 RED metrics
+
 U of USE metric
+
 only 1 env support
+
 conection state detection
+
 platform_health(سناریو های شکست خود سیستم)
+
+
 
 
 
